@@ -73,7 +73,7 @@ export default function PromptPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:8000/payment/${tx}`);
+      const res = await fetch(`https://promptpay-backend-0518.onrender.com/payment/${tx}`);
       if (!res.ok) throw new Error("invalid");
       const p = await res.json();
 
