@@ -28,7 +28,6 @@ function logPromptEvent(txHash?: string) {
 ------------------------------------------------- */
 type WalletState =
   | { status: "none" }
-  | { status: "pending"; confirmations: number; min: number }
   | { status: "active"; remaining: number; total: number }
   | { status: "empty" }
   | { status: "invalid" };
@@ -74,11 +73,8 @@ export default function PromptPage() {
     }
 
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL}/payment/${tx}`
-      );
+      const res = await fetch(`http://localhost:8000/payment/${tx}`);
       if (!res.ok) throw new Error("invalid");
-
       const p = await res.json();
 
       if (p.remaining > 0) {
@@ -133,19 +129,6 @@ export default function PromptPage() {
         const detail = (data?.detail ?? {}) as PaymentRequiredDetail;
         setPaymentDetail(detail);
 
-        if (
-          typeof detail.confirmations === "number" &&
-          typeof detail.min_confirmations === "number"
-        ) {
-          setWalletState({
-            status: "pending",
-            confirmations: detail.confirmations,
-            min: detail.min_confirmations,
-          });
-        } else {
-          setWalletState({ status: "invalid" });
-        }
-
         const existing = getSessionTx();
         if (existing) setTxHash(existing);
         return;
@@ -187,19 +170,8 @@ export default function PromptPage() {
         }
 
         const detail = (data?.detail ?? {}) as PaymentRequiredDetail;
-
-        if (
-          typeof detail.confirmations === "number" &&
-          typeof detail.min_confirmations === "number"
-        ) {
-          setWalletState({
-            status: "pending",
-            confirmations: detail.confirmations,
-            min: detail.min_confirmations,
-          });
-        }
-
         setPaymentDetail(detail);
+
         await sleep(3000);
       }
 
@@ -212,18 +184,86 @@ export default function PromptPage() {
   }
 
   /* -------------------------------------------------
+     Payment Required UI
+  ------------------------------------------------- */
+  const paymentUI = paymentDetail ? (
+    <div className="rounded-xl border border-warn/40 bg-warn/10 p-5 space-y-4">
+      <div>
+        <div className="text-sm font-medium text-warn">
+          Payment Required
+        </div>
+        <div className="mt-1 text-sm text-muted">
+          {paymentDetail.message ??
+            paymentDetail.error ??
+            "Provide a valid transaction hash to continue."}
+        </div>
+      </div>
+
+      {paymentDetail.payment ? (
+        <div className="rounded-xl border border-border bg-bg/40 p-4 space-y-2">
+          <div className="text-sm text-muted">Send</div>
+          <div className="text-lg font-semibold">
+            {paymentDetail.payment.amount}{" "}
+            {paymentDetail.payment.currency}
+          </div>
+          <div className="text-sm text-muted">To (agent wallet)</div>
+          <code className="block break-all text-xs">
+            {paymentDetail.payment.recipient}
+          </code>
+        </div>
+      ) : null}
+
+      {typeof paymentDetail.confirmations === "number" &&
+      typeof paymentDetail.min_confirmations === "number" ? (
+        <div className="text-xs text-muted">
+          Confirmations:{" "}
+          <span className="text-fg font-medium">
+            {paymentDetail.confirmations}/
+            {paymentDetail.min_confirmations}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="space-y-2">
+        <div className="text-sm text-muted">Transaction hash</div>
+        <input
+          value={txHash}
+          onChange={(e) => setTxHash(e.target.value)}
+          placeholder="0x…"
+          className="
+            w-full rounded-xl border border-border bg-bg/50 px-4 py-2 text-sm
+            text-fg placeholder:text-muted shadow-soft
+            focus:outline-none focus:ring-2 focus:ring-accent/40
+          "
+        />
+
+        <button
+          onClick={verifyAndContinue}
+          disabled={loading || !txHash.trim()}
+          className="
+            inline-flex items-center justify-center rounded-xl
+            bg-accent px-5 py-2.5 text-sm font-medium text-bg transition
+            hover:bg-accent/90 disabled:opacity-60
+          "
+        >
+          {loading ? "Confirming…" : "Verify & Continue"}
+        </button>
+
+        <div className="text-xs text-muted">
+          We’ll retry automatically until confirmations are sufficient.
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  /* -------------------------------------------------
      Wallet Banner UI
   ------------------------------------------------- */
   const walletBanner = (
     <div className="rounded-xl border border-border bg-card p-4">
       {walletState.status === "none" && (
-        <div className="text-sm text-warn">🟡 No active payment</div>
-      )}
-
-      {walletState.status === "pending" && (
         <div className="text-sm text-warn">
-          ⏳ Payment detected — confirmations{" "}
-          {walletState.confirmations}/{walletState.min}
+          🟡 No active payment
         </div>
       )}
 
@@ -235,7 +275,9 @@ export default function PromptPage() {
       )}
 
       {walletState.status === "empty" && (
-        <div className="text-sm text-danger">🔴 Credit exhausted</div>
+        <div className="text-sm text-danger">
+          🔴 Credit exhausted
+        </div>
       )}
 
       {walletState.status === "invalid" && (
@@ -264,6 +306,7 @@ export default function PromptPage() {
   ------------------------------------------------- */
   return (
     <div className="mx-auto max-w-3xl space-y-8">
+      {/* Header */}
       <div className="space-y-2">
         <h1 className="text-4xl font-semibold tracking-tight">
           PromptPay AI
@@ -275,33 +318,77 @@ export default function PromptPage() {
 
       {walletBanner}
 
+      {/* Prompt Card */}
       <div className="rounded-xl border border-border bg-card p-6 space-y-5">
+        <div>
+          <h2 className="text-lg font-medium">Ask the Agent</h2>
+          <p className="text-sm text-muted">
+            Each prompt consumes a fixed amount of USDC.
+          </p>
+        </div>
+
         <textarea
           rows={6}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="Ask anything…"
-          className="w-full rounded-xl border p-4"
+          className="
+            w-full resize-none rounded-xl border border-border bg-bg/50
+            p-4 text-sm text-fg placeholder:text-muted shadow-soft
+            focus:outline-none focus:ring-2 focus:ring-accent/40
+          "
         />
 
-        <button
-          onClick={askAgent}
-          disabled={loading || !prompt.trim()}
-          className="rounded-xl bg-accent px-5 py-2.5 text-sm font-medium text-bg"
-        >
-          {loading ? "Running…" : "Ask Agent"}
-        </button>
+        <div className="flex items-center justify-between">
+          <button
+            onClick={askAgent}
+            disabled={loading || !prompt.trim()}
+            className="
+              rounded-xl bg-accent px-5 py-2.5 text-sm font-medium text-bg
+              hover:bg-accent/90 disabled:opacity-60
+            "
+          >
+            {loading ? "Running…" : "Ask Agent"}
+          </button>
 
-        {answer && (
-          <pre className="whitespace-pre-wrap">{answer}</pre>
-        )}
+          <div className="text-sm text-muted">
+            Price:{" "}
+            <span className="text-fg font-medium">
+              {priceLabel}
+            </span>{" "}
+            per prompt
+          </div>
+        </div>
+
+        {error ? (
+          <div className="rounded-xl border border-danger/40 bg-danger/10 p-4 text-sm">
+            <div className="font-medium text-danger">Error</div>
+            <div className="mt-1 text-muted">{error}</div>
+          </div>
+        ) : null}
+
+        {answer ? (
+          <div className="rounded-xl border border-success/40 bg-success/10 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-success">
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-success text-bg">
+                ✓
+              </span>
+              Prompt executed successfully
+            </div>
+            <pre className="mt-3 whitespace-pre-wrap text-[15px] leading-6">
+              {answer}
+            </pre>
+          </div>
+        ) : null}
       </div>
 
-      {paymentDetail && (
-        <div className="text-sm text-muted">
-          Waiting for payment confirmation…
-        </div>
-      )}
+      {/* Payment UI */}
+      {paymentUI}
+
+      {/* Footer */}
+      <div className="text-xs text-muted">
+        Usage events are logged locally to power time-based analytics.
+      </div>
     </div>
   );
 }
