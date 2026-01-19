@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Pay-Per-Prompt AI Dashboard</title>
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 1000px;
+      margin: 30px auto;
+      padding: 0 20px;
+    }
+
+    h2, h3, h4 { margin-bottom: 8px; }
+
+    textarea, input {
+      width: 100%;
+      padding: 10px;
+      margin: 8px 0;
+      font-size: 14px;
+    }
+
+    button {
+      padding: 8px 14px;
+      margin-top: 8px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .box {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 14px;
+      margin-top: 20px;
+      background: #fafafa;
+    }
+
+    .error { color: #b00020; }
+
+    /* ===== Payment Banner ===== */
+    .payment-banner {
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+
+    .state-none { background: #fff3cd; border: 1px solid #ffeeba; }
+    .state-active { background: #e6fffa; border: 1px solid #b2f5ea; }
+    .state-empty { background: #fdecea; border: 1px solid #f5c6cb; }
+
+    /* ===== Progress Bar ===== */
+    .progress {
+      background: #eee;
+      border-radius: 4px;
+      overflow: hidden;
+      height: 10px;
+      margin-top: 6px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: #38b2ac;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    /* ===== Loader ===== */
+    .loader {
+      width: 18px;
+      height: 18px;
+      border: 3px solid #ddd;
+      border-top: 3px solid #38b2ac;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* ===== Success UI ===== */
+    .success-title {
+      font-weight: 600;
+      font-size: 16px;
+      color: #0a7a28;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .checkmark {
+      background: #0a7a28;
+      color: white;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+    }
+
+    .answer-box {
+      background: #f8fdfc;
+      border: 1px solid #c6f6d5;
+      border-radius: 6px;
+      padding: 14px;
+      line-height: 1.6;
+      font-size: 15px;
+      white-space: pre-wrap;
+    }
+
+    /* ===== Fade In ===== */
+    .fade-in {
+      animation: fadeIn 0.3s ease-in;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 14px;
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 13px;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+
+    th { background: #f0f0f0; }
+
+    code {
+      font-size: 12px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+
+<body>
+
+<h2>🧠 Pay-Per-Prompt AI Agent</h2>
+
+<div id="paymentState" class="payment-banner state-none">
+  <b>🟡 No active payment</b>
+</div>
+
+<div class="box">
+  <h3>Ask the Agent</h3>
+  <textarea id="prompt" rows="4"></textarea>
+  <button id="askBtn" onclick="askAgent()">Ask Agent</button>
+  <div id="response" class="box"></div>
+</div>
+
+<div class="box">
+  <h3>📊 Live Dashboard</h3>
+  <button onclick="loadDashboard()">🔄 Refresh</button>
+  <button onclick="clearPayment()">❌ Clear Session</button>
+
+  <div class="cards" id="statsCards"></div>
+
+  <h4>💳 Payments</h4>
+  <div id="paymentsTable"></div>
+
+  <h4>📈 Usage</h4>
+  <div id="usageTable"></div>
+</div>
+
+<script>
+const API_PROMPT   = "http://localhost:8000/prompt";
+const API_PAYMENTS = "http://localhost:8000/payments";
+const API_REVENUE  = "http://localhost:8000/revenue";
+const API_USAGE    = "http://localhost:8000/usage";
+
+let lastPrompt = "";
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+/* ================= PROMPT ================= */
+
+async function askAgent() {
+  const btn = document.getElementById("askBtn");
+  btn.disabled = true;
+
+  const prompt = document.getElementById("prompt").value;
+  lastPrompt = prompt;
+
+  const resBox = document.getElementById("response");
+  resBox.innerHTML = `<div class="loader"></div> Asking agent…`;
+
+  try {
+    const headers = { "Content-Type": "application/json" };
+    const tx = localStorage.getItem("paymentTxHash");
+    if (tx) headers["X-Payment"] = tx;
+
+    const res = await fetch(API_PROMPT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt })
+    });
+
+    const data = await res.json();
+
+    if (res.status === 402) {
+      showPaymentRequired(data.detail);
+    } else if (res.status === 200) {
+      if (data.receipt?.tx_hash) {
+        localStorage.setItem("paymentTxHash", data.receipt.tx_hash);
+      }
+      showSuccess(data);
+      loadDashboard();
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ================= PAYMENT REQUIRED ================= */
+
+function showPaymentRequired(detail) {
+  document.getElementById("response").innerHTML = `
+    <div class="error"><b>Payment Required</b></div>
+    <p>Amount: <b>${detail.payment.amount} USDC</b></p>
+    <code>${detail.payment.recipient}</code>
+    <input id="txHash" placeholder="Paste tx hash…" />
+    <button onclick="verifyWithPolling()">Verify & Continue</button>
+  `;
+}
+
+/* ================= POLLING ================= */
+
+async function verifyWithPolling() {
+  const txHash = document.getElementById("txHash").value;
+  localStorage.setItem("paymentTxHash", txHash);
+
+  const resBox = document.getElementById("response");
+
+  for (let i = 0; i < 10; i++) {
+    resBox.innerHTML = `<div class="loader"></div> Confirming payment…`;
+
+    const res = await fetch(API_PROMPT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Payment": txHash
+      },
+      body: JSON.stringify({ prompt: lastPrompt })
+    });
+
+    const data = await res.json();
+
+    if (res.status === 200) {
+      showSuccess(data);
+      loadDashboard();
+      return;
+    }
+
+    await sleep(3000);
+  }
+
+  resBox.innerHTML = `<div class="error">⏱ Confirmation taking too long.</div>`;
+}
+
+/* ================= SUCCESS ================= */
+
+function showSuccess(data) {
+  const answer = (data.answer || "").trim();
+
+  const el = document.getElementById("response");
+  el.innerHTML = `
+    <div class="success-title">
+      <span class="checkmark">✔</span>
+      Payment Verified
+    </div>
+    <div class="answer-box">${answer}</div>
+  `;
+  el.classList.add("fade-in");
+}
+
+/* ================= DASHBOARD ================= */
+
+async function loadDashboard() {
+  const [revenue, payments, usage] = await Promise.all([
+    fetch(API_REVENUE).then(r => r.json()),
+    fetch(API_PAYMENTS).then(r => r.json()),
+    fetch(API_USAGE).then(r => r.json())
+  ]);
+
+  renderPaymentState(payments.payments || []);
+  renderStats(revenue);
+  renderPayments(payments.payments || []);
+  renderUsage(usage.transactions || []);
+}
+
+function renderPaymentState(payments) {
+  const banner = document.getElementById("paymentState");
+  const tx = localStorage.getItem("paymentTxHash");
+
+  if (!tx) {
+    banner.className = "payment-banner state-none";
+    banner.innerHTML = "<b>🟡 No active payment</b>";
+    return;
+  }
+
+  const p = payments.find(x => x.tx_hash === tx);
+  if (!p || p.remaining <= 0) {
+    banner.className = "payment-banner state-empty";
+    banner.innerHTML = "<b>🔴 Credit exhausted</b>";
+    return;
+  }
+
+  const pct = Math.min(100, (p.remaining / p.total_paid) * 100);
+  banner.className = "payment-banner state-active";
+  banner.innerHTML = `
+    <b>🟢 Active Credit</b><br/>
+    Remaining: ${p.remaining} USDC
+    <div class="progress">
+      <div class="progress-fill" style="width:${pct}%"></div>
+    </div>
+  `;
+}
+
+function renderStats(d) {
+  document.getElementById("statsCards").innerHTML = `
+    <div class="card">Revenue<br><b>${d.total_revenue_usdc}</b></div>
+    <div class="card">Consumed<br><b>${d.total_consumed_usdc}</b></div>
+    <div class="card">Remaining<br><b>${d.total_remaining_credits}</b></div>
+    <div class="card">Prompts<br><b>${d.total_prompts_served}</b></div>
+  `;
+}
+
+function renderPayments(ps) {
+  document.getElementById("paymentsTable").innerHTML = ps.length
+    ? `<table>
+        <tr><th>Tx</th><th>Paid</th><th>Remaining</th><th>Uses</th></tr>
+        ${ps.map(p => `
+          <tr>
+            <td><code>${p.tx_hash}</code></td>
+            <td>${p.total_paid}</td>
+            <td>${p.remaining}</td>
+            <td>${p.uses}</td>
+          </tr>`).join("")}
+      </table>`
+    : "<i>No payments</i>";
+}
+
+function renderUsage(tx) {
+  document.getElementById("usageTable").innerHTML = tx.length
+    ? `<table>
+        <tr><th>Tx</th><th>Prompts Used</th></tr>
+        ${tx.map(t => `
+          <tr>
+            <td><code>${t.tx_hash}</code></td>
+            <td>${t.prompts_served}</td>
+          </tr>`).join("")}
+      </table>`
+    : "<i>No usage</i>";
+}
+
+function clearPayment() {
+  localStorage.removeItem("paymentTxHash");
+  loadDashboard();
+}
+
+loadDashboard();
+</script>
+
+</body>
+</html>
