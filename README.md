@@ -396,6 +396,8 @@ curl -X POST http://localhost:8000/prompt \
 ### Get Testnet USDC
 Visit [Circle Faucet](https://faucet.circle.com) to get free Arc testnet USDC for testing.
 
+Send testnet USDC to agent wallet address - 0x170c00dfefced35063b38b62f7705cb868768de5
+
 ---
 
 ## 🛠️ Development
